@@ -1,0 +1,6 @@
+[submodule "3rd-party/stdexec-src"]
+	path = 3rd-party/stdexec-src
+	url = https://github.com/NVIDIA/stdexec.git
+[submodule "3rd-party/optick-src"]
+	path = 3rd-party/optick-src
+	url = https://github.com/bombomby/optick.git
