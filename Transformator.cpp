@@ -1,10 +1,14 @@
 #include "Transformator.hpp"
 
-Image Transform::transform(Image image) const
+#include <optick.h>
+
+Image Transform::transform(const Image& image) const
 {
-    image.colorize();
-    image.resize();
-    return image;
+    OPTICK_EVENT();
+    Image result = image;
+    result.colorize();
+    result.resize();
+    return result;
 }
 
 Image Transform::transform_upper(Image image) const
