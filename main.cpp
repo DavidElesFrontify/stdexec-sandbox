@@ -20,10 +20,10 @@
 #include "durations.hpp"
 
 constexpr const bool g_enable_capture = true;
-constexpr const bool g_run_test = false;
+constexpr const bool g_run_test = true;
 static_assert(stdexec::sender<exec::task<void>>);
 
-template<typename Res, stdexec::scheduler Sched>
+template<typename Res>
 class QueueScheduler
 {
 public:
@@ -35,7 +35,6 @@ public:
         bool await_ready() { return scheduler->isReady(); }
         void await_suspend(std::coroutine_handle<> handle)
         {
-            std::cout << "Suspend execution" << std::endl;
             if(scheduler->m_awaiter != nullptr)
             {
                 throw std::runtime_error("Queue is already awaited. Multiple await is not supported");
@@ -47,37 +46,39 @@ public:
         Res await_resume() { return scheduler->pop(); }
     };
     using Result = Res;
-    explicit QueueScheduler(Sched scheduler)
-        : m_scheduler(std::move(scheduler))
+    QueueScheduler(exec::async_scope* scope)
+    : m_scope(scope)
     {}
 
     ~QueueScheduler()
     {
-        stdexec::sync_wait(m_scope.on_empty());
+        /*
+        We cannot wait until the scope's thread is finished because the coroutine is moved inside
+        the running threads. I.e.: When the coroutine owns the queue the queue destructor is called inside the
+        coroutine. But when the coroutine is moved inside the scope it will be a dead lock.
+        */
+        //stdexec::sync_wait(m_scope->on_empty());
     }
 
     void push(stdexec::sender auto&& task)
     {
+        using stdexec::let_value;
         auto lock = std::unique_lock(m_results_mutex);
         
         auto skeleton_it = m_results.insert(m_results.end(), std::nullopt);
         auto set_skeleton = [this, skeleton_it](Res result) mutable 
         {
             *skeleton_it = std::move(result);
-            std::cout << "Finished: " << result << std::endl;
             if(isReady())
             {
                 auto* awaiter = m_awaiter.exchange(nullptr);
                 if(awaiter != nullptr)
                 {
-                    std::cout << "Resume coroutine: " << std::endl;
                     awaiter->awaiting_coroutine.resume();
                 }
             }
-            std::cout << "Task finished: " << result;
         };
-        std::cout << "Schedule task" << std::endl;
-        m_scope.spawn(task | stdexec::then(set_skeleton));
+        m_scope->spawn( m_scope->on_empty() | let_value([task = std::move(task)] { return task; } ) | stdexec::then(set_skeleton));
     }
 
     std::optional<Res> head() const
@@ -99,15 +100,12 @@ public:
         }
         auto result = std::move(*m_results.front());
         m_results.pop_front();
-        std::cout << "pop " << result << std::endl;
         return result;
     }
     Awaiter operator co_await()
     {
         return Awaiter{this};
     }
-
-    Sched& getScheduler() { return m_scheduler; }
 
     bool isReady() const
     {
@@ -118,8 +116,7 @@ private:
     mutable std::shared_mutex m_results_mutex;
     std::atomic<Awaiter*> m_awaiter {nullptr};
 
-    exec::async_scope m_scope;
-    Sched m_scheduler;
+    exec::async_scope* m_scope{nullptr};
 };
 
 class Context
@@ -132,6 +129,14 @@ public:
         OPTICK_EVENT();
         using stdexec::then;
         stdexec::sender auto task_flow = processVideo(std::move(input), std::move(output)) | then(callback);
+        m_scope.spawn(std::move(task_flow));
+    }
+    template<typename T> 
+    void spawn2(Input input, Output output, T&& callback)
+    {
+        OPTICK_EVENT();
+        using stdexec::then;
+        stdexec::sender auto task_flow = processVideoPerFrame(std::move(input), std::move(output)) | then(callback);
         m_scope.spawn(std::move(task_flow));
     }
     ~Context()
@@ -152,6 +157,11 @@ private:
 
         return stdexec::on(scheduler, just(input)) | then([](Input* input) { OPTICK_THREAD(g_thread_name.c_str())return input->read(); });
     }
+    std::optional<Image> readImage(Input& input)
+    {
+        OPTICK_THREAD(g_thread_name.c_str());
+        return input.read();
+    }
     stdexec::sender auto transform(Image image)
     {
         OPTICK_EVENT();
@@ -159,8 +169,12 @@ private:
         using stdexec::then;
         auto scheduler = m_pool.get_scheduler();
 
-        return stdexec::on(scheduler, just(image)) | then([](const Image& image) { return Transform{}.transform(image); });
+        return stdexec::on(scheduler, just(image)) | then([this](const Image& image) { return doTransform(image); });
 
+    }
+    Image doTransform(const Image& image)
+    {
+        return Transform{}.transform(image);
     }
     stdexec::sender auto saveImage(Image image, Output* output)
     {
@@ -173,6 +187,46 @@ private:
         return stdexec::on(scheduler, when_all(just(image), just(output))) | then([](const Image& image, Output* output) { output->write(image); });
     }
 
+    stdexec::sender auto processFrame(Input* input)
+    {
+        using stdexec::on;
+        using stdexec::then;
+        using stdexec::just;
+        auto scheduler = m_pool.get_scheduler();
+        return on(scheduler, just(input)) 
+        | then([this](Input* input) { return readImage(*input);})
+        | then([this](std::optional<Image> image) 
+                {
+                    return image.and_then([this](auto & img)
+                        { 
+                            return std::optional{doTransform(img)};
+                        });
+                });
+    }
+
+    exec::task<void> processVideoPerFrame(Input input, Output output)
+    {
+        using stdexec::when_all;
+        using stdexec::then;
+        using stdexec::just;
+        OPTICK_EVENT();
+        QueueScheduler<std::optional<Image>> queue(&m_scope);
+
+        constexpr const uint32_t num_parallel_frames = 3;
+        for(uint32_t i = 0; i < num_parallel_frames; ++i)
+        {
+            queue.push(readImage(&input));
+        }
+        while(std::optional<Image> image = co_await queue)
+        {
+            queue.push(readImage(&input));
+            co_await (when_all(transform(*image), just(&output)) | then(
+            [](Image image, Output* output)
+            {
+                output->write(image);
+            }));
+        }
+    }
     exec::task<void> processVideo(Input input, Output output)
     {
         OPTICK_EVENT();
@@ -194,7 +248,7 @@ class Server
     {
 
         OPTICK_EVENT();
-        m_context.spawn(std::move(input), std::move(output), [](){std::cout << "Processing finished;" << std::endl;});
+        m_context.spawn2(std::move(input), std::move(output), [](){std::cout << "Processing finished;" << std::endl;});
     }
     void actBusy()
     {
@@ -206,7 +260,7 @@ class Server
     {
         OPTICK_EVENT();
         startProcessing(Input{"Input 01"}, Output{});
-        startProcessing(Input{"Input 02"}, Output{});
+        /*startProcessing(Input{"Input 02"}, Output{});
         startProcessing(Input{"Input 03"}, Output{});
         startProcessing(Input{"Input 04"}, Output{});
         startProcessing(Input{"Input 05"}, Output{});
@@ -220,7 +274,7 @@ class Server
         startProcessing(Input{"Input 13"}, Output{});
         startProcessing(Input{"Input 14"}, Output{});
         startProcessing(Input{"Input 15"}, Output{});
-        actBusy();
+        actBusy();*/
     }
 
     private:
@@ -228,22 +282,20 @@ class Server
 };
 
 
-template<typename T>
-exec::task<void> testQueue(T& queue)
+exec::task<void> testQueue(QueueScheduler<int>& queue, stdexec::scheduler auto scheduler)
 {
     using stdexec::on;
     using stdexec::just;
     using stdexec::then;    
     using namespace std::chrono_literals;
 
-    queue.push(on(queue.getScheduler(), just(42)) | then([](int x) {busyWait(10s); return x;}));
-    queue.push(on(queue.getScheduler(), just(41)) | then([](int x) {busyWait(5s); return x;}));
-    queue.push(on(queue.getScheduler(), just(40)) | then([](int x) {busyWait(10s); return x;}));
+    queue.push(on(scheduler, just(42)) | then([](int x) {busyWait(10s); return x;}));
+    queue.push(on(scheduler, just(41)) | then([](int x) {busyWait(5s); return x;}));
+    queue.push(on(scheduler, just(40)) | then([](int x) {busyWait(10s); return x;}));
     std::cout << "start wait: " << std::endl;
     while(int x = co_await queue)
     {
-        std::cout << "schedule new task: " << x  - 1 << std::endl;
-        queue.push(on(queue.getScheduler(), just (x - 1)));
+        queue.push(on(scheduler, just (x - 3)));
         std::cout << x << std::endl;
     }
     std::cout << "End test" << std::endl;
@@ -273,9 +325,9 @@ int main()
         exec::static_thread_pool pool{3};
         
         auto scheduler = pool.get_scheduler();
-
-        QueueScheduler<int, decltype(scheduler)> queue(scheduler);
-        stdexec::sync_wait(testQueue(queue));
+        exec::async_scope scope;
+        QueueScheduler<int> queue(&scope);
+        stdexec::sync_wait(testQueue(queue, scheduler));
     }
     return 0;
 }
