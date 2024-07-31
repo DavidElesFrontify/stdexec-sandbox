@@ -1,6 +1,8 @@
 {
     "files.associations": {
         "*.tcc": "cpp",
-        "optional": "cpp"
+        "optional": "cpp",
+        "coroutine": "cpp",
+        "limits": "cpp"
     }
 }

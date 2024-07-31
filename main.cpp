@@ -12,6 +12,7 @@
 #include <exec/static_thread_pool.hpp>
 #include <exec/async_scope.hpp>
 
+
 #include "Image.hpp"
 #include "Input.hpp"
 #include "Output.hpp"
@@ -63,9 +64,12 @@ public:
     void push(stdexec::sender auto&& task)
     {
         using stdexec::let_value;
-        auto lock = std::unique_lock(m_results_mutex);
         
-        auto skeleton_it = m_results.insert(m_results.end(), std::nullopt);
+        auto skeleton_it = [this]
+        {
+            auto lock = std::unique_lock(m_results_mutex);
+            return m_results.insert(m_results.end(), std::nullopt);
+        }();
         auto set_skeleton = [this, skeleton_it](Res result) mutable 
         {
             *skeleton_it = std::move(result);
@@ -78,13 +82,25 @@ public:
                 }
             }
         };
-        m_scope->spawn( m_scope->on_empty() | let_value([task = std::move(task)] { return task; } ) | stdexec::then(set_skeleton));
+
+        m_scope->spawn( task | stdexec::then(set_skeleton));
     }
 
     std::optional<Res> head() const
     {
         std::shared_lock lock(m_results_mutex);
         return m_results.empty() ? std::nullopt : m_results.front();
+    }
+
+    bool empty() const
+    {
+        std::shared_lock lock(m_results_mutex);
+        return m_results.empty();
+    }
+    uint32_t size() const
+    {
+        std::shared_lock lock(m_results_mutex);
+        return m_results.size();
     }
 
     Res pop()
@@ -94,7 +110,7 @@ public:
         {
             throw std::runtime_error("Queue is emoty, can't pop");
         }
-        if(m_results.front() == std::nullopt)
+        if(m_results.front().has_value() == false)
         {
             throw std::runtime_error("Queue is not ready, can't pop");
         }
@@ -117,6 +133,130 @@ private:
     std::atomic<Awaiter*> m_awaiter {nullptr};
 
     exec::async_scope* m_scope{nullptr};
+};
+
+template<typename T, stdexec::sender_of<stdexec::set_value_t(T)> U>
+class AsyncReader
+{
+private:
+    static constexpr const uint32_t BACKBUFFER_SIZE = 2;
+public:
+    using Sender = U;
+    using Result = T;
+    AsyncReader(Sender sender, exec::async_scope* scope)
+        : m_sender(std::move(sender))
+        , m_scope(scope)
+    {
+        asyncReadImpl();
+    }
+
+    
+    struct [[nodiscard]] Awaiter 
+    {
+        AsyncReader* reader {nullptr};
+        std::coroutine_handle<> awaiting_coroutine = std::noop_coroutine();
+        bool await_ready() { return reader->isReady(); }
+        bool await_suspend(std::coroutine_handle<> handle)
+        {
+            if(reader->m_awaiting_coroutine != nullptr)
+            {
+                throw std::runtime_error("Only one co_await is supported");
+            }
+            std::unique_lock lock(reader->m_backbuffer_mutex);
+            awaiting_coroutine = handle;
+            /*
+            Lock is necessary to protect both cases, imagine that else is not part:
+             - [ThreadA] reader.hasValue()? -> false & release lock
+             - [ThreadB] reader.setValue() & release lock
+             - [ThreadB] reader.resumeAwaitingCoro() (which is null right now)
+             - [ThreadA] reader.setAwawitingCoro() (too late)
+            */
+            if(reader->m_backbuffer[reader->getReadIndex()].has_value())
+            {
+                return false;
+            }
+            else
+            {
+                reader->m_awaiting_coroutine = this;
+                return true;
+            }
+        }
+
+        Result await_resume() 
+        {
+            Result result = *reader->clear();
+            reader->asyncReadImpl();
+            return result;
+        }
+
+        explicit Awaiter(AsyncReader* reader)
+        : reader(reader)
+        {}
+    };
+
+    Awaiter asyncRead()
+    {
+        return Awaiter{this};
+    }
+private:
+    void asyncReadImpl()
+    {
+        using stdexec::then;
+        m_scope->spawn(m_sender | then([this](Result result) { setResult(std::move(result)); resumeAwaitingCoroutine(); } ));
+    }
+    void setResult(Result result)
+    {
+        std::lock_guard lock(m_backbuffer_mutex);
+        if(m_backbuffer[getWriteIndex()] != std::nullopt)
+        {
+            throw std::runtime_error("Data lost");
+        }
+        m_backbuffer[getWriteIndex()] = std::move(result);
+        stepBackbuffer();
+    }
+    bool isReady() const 
+    {
+        std::lock_guard lock(m_backbuffer_mutex);
+        return m_backbuffer[getReadIndex()].has_value();
+    }
+    std::optional<Result> clear()
+    {
+        std::lock_guard lock(m_backbuffer_mutex);
+        auto result = std::move(m_backbuffer[getReadIndex()]);
+        m_backbuffer[getReadIndex()] = std::nullopt;
+        return result;
+    }
+    // Should be outside of the locking scope to avoid keep locking the scope while the coroutine runs
+    void resumeAwaitingCoroutine()
+    {
+        if(m_awaiting_coroutine != nullptr)
+        {
+            auto coroutine = m_awaiting_coroutine.exchange(nullptr);
+            if(coroutine != nullptr)
+            {
+                coroutine->awaiting_coroutine.resume();
+            }
+        }
+    }
+
+    uint32_t getWriteIndex() const
+    {
+        return m_head_index;
+    }
+    uint32_t getReadIndex() const
+    {
+        return (m_head_index + m_backbuffer.size() - 1) % m_backbuffer.size();
+    }
+    void stepBackbuffer() 
+    {
+        m_head_index = (m_head_index + 1) % m_backbuffer.size();
+    }
+    Sender m_sender;
+    exec::async_scope* m_scope {nullptr};
+    mutable std::mutex m_backbuffer_mutex;
+    std::array<std::optional<Result>, BACKBUFFER_SIZE> m_backbuffer {};
+    uint32_t m_head_index{0};
+    std::atomic<Awaiter*> m_awaiting_coroutine {nullptr};
 };
 
 class Context
@@ -154,8 +294,9 @@ private:
         using stdexec::just;
         using stdexec::then;
         auto scheduler = m_pool.get_scheduler();
+        std::cout << "WAT: Schedule read" << std::endl;
 
-        return stdexec::on(scheduler, just(input)) | then([](Input* input) { OPTICK_THREAD(g_thread_name.c_str())return input->read(); });
+        return stdexec::on(scheduler, just(input)) | then([](Input* input) { OPTICK_THREAD(g_thread_name.c_str()); return input->read(); });
     }
     std::optional<Image> readImage(Input& input)
     {
@@ -203,29 +344,44 @@ private:
                         });
                 });
     }
+    stdexec::sender auto processVideoPerFrame(Input input, Output output)
+    {
+        auto queue = std::make_shared<QueueScheduler<std::optional<Image>>>(&m_scope);
+        return stdexec::when_all(readImages(std::move(input), queue), writeImages(std::move(output), queue));
+    }
 
-    exec::task<void> processVideoPerFrame(Input input, Output output)
+    exec::task<void> writeImages(Output output, std::shared_ptr<QueueScheduler<std::optional<Image>>> queue)
     {
         using stdexec::when_all;
         using stdexec::then;
         using stdexec::just;
+        using stdexec::on;
         OPTICK_EVENT();
-        QueueScheduler<std::optional<Image>> queue(&m_scope);
+        while(std::optional<Image> image = co_await (*queue))
+        {
+            co_await (when_all(just(std::move(*image)), just(&output)) 
+                      | then([](Image image, Output* output)
+                             {
+                                 output->write(image);
+                             }));
+        }
+    }
+    exec::task<void> readImages(Input input, std::shared_ptr<QueueScheduler<std::optional<Image>>> queue)
+    {
+        using stdexec::when_all;
+        using stdexec::then;
+        using stdexec::just;
+        using stdexec::on;
+        OPTICK_EVENT();
+        stdexec::sender_of<stdexec::set_value_t(std::optional<Image>)> auto reading_sender = readImage(&input);
+        AsyncReader<std::optional<Image>, decltype(reading_sender)> reader(reading_sender, &m_scope);
+        auto as_optional = [](auto value) { return std::optional{std::move(value)}; };
+        while(std::optional<Image> image = co_await reader.asyncRead())
+        {
+            queue->push(transform(*image) | then(as_optional));
+        }
+        queue->push(just(std::nullopt));
 
-        constexpr const uint32_t num_parallel_frames = 3;
-        for(uint32_t i = 0; i < num_parallel_frames; ++i)
-        {
-            queue.push(readImage(&input));
-        }
-        while(std::optional<Image> image = co_await queue)
-        {
-            queue.push(readImage(&input));
-            co_await (when_all(transform(*image), just(&output)) | then(
-            [](Image image, Output* output)
-            {
-                output->write(image);
-            }));
-        }
     }
     exec::task<void> processVideo(Input input, Output output)
     {
@@ -273,8 +429,8 @@ class Server
         startProcessing(Input{"Input 12"}, Output{});
         startProcessing(Input{"Input 13"}, Output{});
         startProcessing(Input{"Input 14"}, Output{});
-        startProcessing(Input{"Input 15"}, Output{});
-        actBusy();*/
+        startProcessing(Input{"Input 15"}, Output{});*/
+        actBusy();
     }
 
     private:

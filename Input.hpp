@@ -26,6 +26,6 @@ class Input
         }
     private:
         std::atomic_uint32_t m_frame_number{0};
-        uint32_t m_size {3};
+        uint32_t m_size {6};
         std::string m_name;
 };
