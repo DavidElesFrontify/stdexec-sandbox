@@ -9,6 +9,11 @@ add_subdirectory(3rd-party/optick-src)
 add_executable(sandbox
     main.cpp
     util.hpp
-    Input.cpp Output.cpp Transformator.cpp Image.cpp)
+    AsyncReader.hpp
+    QueueScheduler.hpp
+    Input.cpp 
+    Output.cpp
+    Transformator.cpp
+    Image.cpp)
 
 target_link_libraries(sandbox PUBLIC STDEXEC::stdexec OptickCore)
