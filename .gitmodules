@@ -4,3 +4,6 @@
 [submodule "3rd-party/optick-src"]
 	path = 3rd-party/optick-src
 	url = https://github.com/bombomby/optick.git
+[submodule "3rd-party/tbb-src"]
+	path = 3rd-party/tbb-src
+	url = https://github.com/oneapi-src/oneTBB.git

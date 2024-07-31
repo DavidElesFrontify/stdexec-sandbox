@@ -5,6 +5,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 add_subdirectory(3rd-party/stdexec-src)
 add_subdirectory(3rd-party/optick-src)
+add_subdirectory(3rd-party/tbb-src)
 
 add_executable(sandbox
     main.cpp
@@ -16,4 +17,4 @@ add_executable(sandbox
     Transformator.cpp
     Image.cpp)
 
-target_link_libraries(sandbox PUBLIC STDEXEC::stdexec OptickCore)
+target_link_libraries(sandbox PUBLIC STDEXEC::stdexec TBB::tbb OptickCore)

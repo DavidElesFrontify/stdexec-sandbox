@@ -11,6 +11,7 @@
 #include <exec/task.hpp>
 #include <exec/static_thread_pool.hpp>
 #include <exec/async_scope.hpp>
+#include <tbbexec/tbb_thread_pool.hpp>
 
 
 #include "Image.hpp"
@@ -112,7 +113,7 @@ private:
 
     }
 
-    exec::static_thread_pool m_pool{32};
+    tbbexec::tbb_thread_pool m_pool{32};
     exec::async_scope m_scope;
 };
 
