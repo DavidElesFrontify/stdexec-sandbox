@@ -7,3 +7,6 @@
 [submodule "3rd-party/tbb-src"]
 	path = 3rd-party/tbb-src
 	url = https://github.com/oneapi-src/oneTBB.git
+[submodule "3rd-party/libuv-cmake-src"]
+	path = 3rd-party/libuv-cmake-src
+	url = https://github.com/xenoscopic/libuv-cmake.git
