@@ -1,4 +1,5 @@
 #include "LibuvFakeServer.hpp"
+#include "LibuvThreadPool.hpp"
 
 #include "Context.hpp"
 
@@ -13,8 +14,11 @@ namespace
             static Globals instance;
             return instance;
         }
+        Globals()
+            : context(uv_default_loop())
+            {}
 
-        Context context;
+        Context<LibuvThreadPool> context;
         uv_loop_t* main_loop{nullptr};
     };
     void onIdle(uv_idle_t *handle)

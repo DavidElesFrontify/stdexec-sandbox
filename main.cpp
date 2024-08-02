@@ -11,8 +11,8 @@ int main()
     }
     {
         OPTICK_FRAME("MainThread");
-        //runFakeServer();
-        runLibUvServer();
+        runFakeServer();
+        //runLibUvServer();
     }
     if constexpr(g_enable_capture)
     {

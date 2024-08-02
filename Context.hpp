@@ -26,11 +26,21 @@
 #include "QueueScheduler.hpp"
 #include "AsyncReader.hpp"
 
-
+template<typename THREAD_POOL>
 class Context
 {
 public:
-
+    template <class... Args>
+      requires stdexec::constructible_from<THREAD_POOL, Args...>
+    Context(Args&&... args)
+        : m_pool(std::forward<Args>(args)...)
+    {
+        if(const uint32_t num_of_threads = m_pool.available_parallelism(); num_of_threads < 32)
+        {
+            std::cout << "WARNING it looks like not all the threads are utilized (32). If using libuv do not forget defining: UV_THREADPOOL_SIZE to 32.Current num of threads: " 
+                    << m_pool.available_parallelism() << std::endl;
+        }
+    }
     template<typename T> 
     void spawn2(Input input, Output output, T&& callback)
     {
@@ -112,6 +122,6 @@ private:
 
     }
 
-    tbbexec::tbb_thread_pool m_pool{32};
+    THREAD_POOL m_pool{32};
     exec::async_scope m_scope;
 };

@@ -38,7 +38,7 @@ class Server
     }
 
     private:
-    Context m_context;
+    Context<tbbexec::tbb_thread_pool> m_context{32};
 };
 
 

@@ -3,6 +3,12 @@
         "*.tcc": "cpp",
         "optional": "cpp",
         "coroutine": "cpp",
-        "limits": "cpp"
+        "limits": "cpp",
+        "array": "cpp",
+        "string": "cpp",
+        "string_view": "cpp",
+        "ranges": "cpp",
+        "span": "cpp",
+        "ostream": "cpp"
     }
 }
