@@ -13,6 +13,11 @@ find_package(libuv REQUIRED)
 add_executable(sandbox
     main.cpp
     util.hpp
+    LibuvThreadPool.hpp
+    FakeServerDemo.hpp
+    LibuvFakeServer.cpp
+    LibuvFakeServer.hpp
+    Context.hpp
     AsyncReader.hpp
     QueueScheduler.hpp
     Input.cpp 
@@ -20,4 +25,4 @@ add_executable(sandbox
     Transformator.cpp
     Image.cpp)
 
-target_link_libraries(sandbox PUBLIC STDEXEC::stdexec TBB::tbb OptickCore)
+target_link_libraries(sandbox PUBLIC STDEXEC::stdexec TBB::tbb uv OptickCore)
