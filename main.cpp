@@ -136,7 +136,7 @@ class Server
     {
         OPTICK_EVENT();
         startProcessing(Input{"Input 01"}, Output{});
-        /*startProcessing(Input{"Input 02"}, Output{});
+        startProcessing(Input{"Input 02"}, Output{});
         startProcessing(Input{"Input 03"}, Output{});
         startProcessing(Input{"Input 04"}, Output{});
         startProcessing(Input{"Input 05"}, Output{});
@@ -149,7 +149,7 @@ class Server
         startProcessing(Input{"Input 12"}, Output{});
         startProcessing(Input{"Input 13"}, Output{});
         startProcessing(Input{"Input 14"}, Output{});
-        startProcessing(Input{"Input 15"}, Output{});*/
+        startProcessing(Input{"Input 15"}, Output{});
         actBusy();
     }
 
