@@ -6,23 +6,28 @@
 #include <thread>
 
 #include <optick.h>
-#include "util.hpp"
-#include "durations.hpp"
+
+#include "ChannelView.hpp"
 Image::Image(std::string name)
     : m_name(std::move(name))
 {}
+Image::Image(std::string name, const Backend::Channels& channels)
+    : Image(std::move(name))
+{
+    m_backend->reconstructFromChannels(channels);
+}
 void Image::colorize()
 {
     OPTICK_EVENT();
     OPTICK_TAG("name", m_name.c_str());
-    busyWait(durations::one_transform);
+    m_backend->colorize();
     std::cout << "Colorize: " << m_name << std::endl;
 }
 void Image::resize()
 {
     OPTICK_EVENT();
-    busyWait(durations::one_transform);
     OPTICK_TAG("name", m_name.c_str());
+    m_backend->resize();
     std::cout << "Resize: " << m_name << std::endl;
 }
 

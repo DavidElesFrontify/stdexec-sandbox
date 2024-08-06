@@ -22,6 +22,7 @@
 #include "Transformator.hpp"
 #include "util.hpp"
 #include "durations.hpp"
+#include "ChannelView.hpp"
 
 #include "QueueScheduler.hpp"
 #include "AsyncReader.hpp"
@@ -58,6 +59,43 @@ public:
         stdexec::sync_wait(m_scope.on_empty());
     }
 private:
+
+    struct Pipeline
+    {
+        bool colorize_enabled {true};
+        bool resize_enabled {true};
+        stdexec::sender auto scheduleOn(stdexec::scheduler auto scheduler, Image image)
+        {
+            using stdexec::just;
+            using stdexec::then;
+            return stdexec::on(scheduler, just(image)) 
+            | then([this](Image image) { return colorize(image); })
+            | then([this](Image image) { return resize(image); })
+            | then([this](Image image) { return manipulateAlpha(image); });
+        }
+        Image colorize(Image image)
+        {
+            if(colorize_enabled)
+            {
+                image.colorize();
+            }
+            return image;
+        }
+        Image resize(Image image)
+        {
+            if(resize_enabled)
+            {
+                image.resize();
+            }
+            return image;
+        }
+        Image manipulateAlpha(Image image)
+        {
+            ChannelView view{ image };
+            view.manipulateChannel([](float v) { return v * 0.5; });
+            return Image(image.getName(), view.getChannels());
+        }
+    };
     stdexec::sender auto readImage(Input* input)
     {
         OPTICK_EVENT();
@@ -74,12 +112,8 @@ private:
         using stdexec::then;
         auto scheduler = m_pool.get_scheduler();
 
-        return stdexec::on(scheduler, just(image)) | then([this](const Image& image) { return doTransform(image); });
+        return m_pipeline.scheduleOn(scheduler, image);
 
-    }
-    Image doTransform(const Image& image)
-    {
-        return Transform{}.transform(image);
     }
 
     stdexec::sender auto processVideoPerFrame(Input input, Output output)
@@ -124,4 +158,5 @@ private:
 
     THREAD_POOL m_pool{32};
     exec::async_scope m_scope;
+    Pipeline m_pipeline;
 };
