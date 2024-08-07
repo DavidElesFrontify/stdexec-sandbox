@@ -27,6 +27,7 @@ class Image
         void resize();
 
         const std::string& getName() const;
+        Lazy<void> changeColor(float x);
     private:
         Lazy<Backend::Channels> readChannels() const { return m_backend->readChannels(); }
 

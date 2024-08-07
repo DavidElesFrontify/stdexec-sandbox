@@ -32,6 +32,11 @@ void Image::resize()
 }
 
 
+Lazy<void> Image::changeColor(float)
+{
+    Backend::Channels channels = co_await m_backend->readChannels();
+    m_backend->reconstructFromChannels(channels);
+}
 const std::string& Image::getName() const
 {
     return m_name;

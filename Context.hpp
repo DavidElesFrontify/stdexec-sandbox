@@ -92,9 +92,13 @@ private:
         }
         exec::task<Image> manipulateAlpha(Image image)
         {
-            ChannelView view = co_await ChannelView::asyncCreate(image);
-            view.manipulateChannel([](float v) { return v * 0.5; });
-            co_return Image(image.getName(), view.getChannels());
+            co_await image.changeColor(0.2f);
+            co_return image;
+        }
+        Image manipulateAlphaBlocking(Image image)
+        {
+            *image.changeColor(0.2f);
+            return image;
         }
     };
     stdexec::sender auto readImage(Input* input)
