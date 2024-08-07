@@ -68,10 +68,11 @@ private:
         {
             using stdexec::just;
             using stdexec::then;
+            using stdexec::let_value;
             return stdexec::on(scheduler, just(image)) 
             | then([this](Image image) { return colorize(image); })
             | then([this](Image image) { return resize(image); })
-            | then([this](Image image) { return manipulateAlpha(image); });
+            | let_value([this](Image image) { return manipulateAlpha(image); });
         }
         Image colorize(Image image)
         {
@@ -89,11 +90,11 @@ private:
             }
             return image;
         }
-        Image manipulateAlpha(Image image)
+        exec::task<Image> manipulateAlpha(Image image)
         {
-            ChannelView view{ image };
+            ChannelView view = co_await ChannelView::asyncCreate(image);
             view.manipulateChannel([](float v) { return v * 0.5; });
-            return Image(image.getName(), view.getChannels());
+            co_return Image(image.getName(), view.getChannels());
         }
     };
     stdexec::sender auto readImage(Input* input)

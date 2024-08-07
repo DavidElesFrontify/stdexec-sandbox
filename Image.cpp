@@ -31,6 +31,7 @@ void Image::resize()
     std::cout << "Resize: " << m_name << std::endl;
 }
 
+
 const std::string& Image::getName() const
 {
     return m_name;

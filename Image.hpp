@@ -28,7 +28,7 @@ class Image
 
         const std::string& getName() const;
     private:
-        Backend::Channels readChannels() const { return m_backend->readChannels(); }
+        Lazy<Backend::Channels> readChannels() const { return m_backend->readChannels(); }
 
         std::string m_name;
         std::unique_ptr<Backend> m_backend { BackendFactory::createBackend() };

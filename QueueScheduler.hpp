@@ -24,12 +24,16 @@ public:
         bool await_ready() { return scheduler->isReady(); }
         void await_suspend(std::coroutine_handle<> handle)
         {
-            if(scheduler->m_awaiter != nullptr)
-            {
-                throw std::runtime_error("Queue is already awaited. Multiple await is not supported");
-            }
             awaiting_coroutine = handle;
-            scheduler->m_awaiter = this;
+            Awaiter* expected = nullptr;
+            const bool success = scheduler->m_awaiter.compare_exchange_strong(expected,
+                                                                              this,
+                                                                              std::memory_order_release,
+                                                                              std::memory_order_relaxed);
+            if(success == false)
+            {
+                throw std::runtime_error("Only one await is supported");
+            }
         }
 
         Res await_resume() { return scheduler->pop(); }
@@ -63,7 +67,7 @@ public:
             *skeleton_it = std::move(result);
             if(isReady())
             {
-                auto* awaiter = m_awaiter.exchange(nullptr);
+                auto* awaiter = m_awaiter.exchange(nullptr, std::memory_order_acq_rel);
                 if(awaiter != nullptr)
                 {
                     awaiter->awaiting_coroutine.resume();

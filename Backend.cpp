@@ -1,37 +1,57 @@
 #include "Backend.hpp"
 #include "util.hpp"
 #include "durations.hpp"
+#include "SingleShotEvent.hpp"
+
+#include <optick.h>
+
 void BackendA::colorize()
 {
+    OPTICK_EVENT();
     busyWait(durations::one_transform);
 };
 void BackendA::resize() 
 {
+    OPTICK_EVENT();
     busyWait(durations::one_transform);
 }
-Backend::Channels BackendA::readChannels() const 
+Lazy<Backend::Channels> BackendA::readChannels() const 
 {
-    busyWait(durations::one_transform);
-    return {};
+    OPTICK_EVENT();
+    SingleShotEvent event;
+    std::thread([&]
+    {
+        OPTICK_THREAD("Background worker");
+        OPTICK_EVENT();
+        busyWait(durations::one_transform);
+        event.set();
+    }).detach();
+    co_await event;
+    co_return Backend::Channels{};
 }
 void BackendA::reconstructFromChannels(const Channels&) 
 {
+    OPTICK_EVENT();
     busyWait(durations::one_transform);
 }
 void BackendB::colorize() 
 {
+    OPTICK_EVENT();
     busyWait(durations::one_transform);
 };
 void BackendB::resize() 
 {
+    OPTICK_EVENT();
     busyWait(durations::one_transform);
 }
-Backend::Channels BackendB::readChannels() const 
+Lazy<Backend::Channels> BackendB::readChannels() const 
 {
+    OPTICK_EVENT();
     busyWait(durations::one_transform);
-    return {};
+    co_return Backend::Channels{};
 }
 void BackendB::reconstructFromChannels(const Channels&) 
 {
+    OPTICK_EVENT();
     busyWait(durations::one_transform);
 }
