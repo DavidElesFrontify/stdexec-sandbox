@@ -36,7 +36,14 @@ public:
             }
         }
 
-        Res await_resume() { return scheduler->pop(); }
+        Res await_resume() 
+        {
+            if(auto exception = scheduler->resetError(); exception != nullptr) 
+            {
+                std::rethrow_exception(exception);
+            } 
+            return scheduler->pop(); 
+        }
     };
     using Result = Res;
     QueueScheduler(exec::async_scope* scope)
@@ -56,13 +63,18 @@ public:
     void push(stdexec::sender auto&& task)
     {
         using stdexec::let_value;
+        using stdexec::upon_error;
+        if(isClosed())
+        {
+            throw std::runtime_error("Can't push into a closed queue");
+        }
         
         auto skeleton_it = [this]
         {
             auto lock = std::unique_lock(m_results_mutex);
             return m_results.insert(m_results.end(), std::nullopt);
         }();
-        auto set_skeleton = [this, skeleton_it](Res result) mutable 
+        auto set_skeleton = [this, skeleton_it](Result result) mutable 
         {
             *skeleton_it = std::move(result);
             if(isReady())
@@ -74,11 +86,27 @@ public:
                 }
             }
         };
+        auto on_error = [this, skeleton_it ](std::exception_ptr error) mutable 
+        {
+            setError(error);
+            {
+                auto lock = std::unique_lock(m_results_mutex);
+                m_results.erase(skeleton_it);
+            }
+            if(isReady())
+            {
+                auto* awaiter = m_awaiter.exchange(nullptr, std::memory_order_acq_rel);
+                if(awaiter != nullptr)
+                {
+                    awaiter->awaiting_coroutine.resume();
+                }
+            }
+        };
 
-        m_scope->spawn( task | stdexec::then(set_skeleton));
+        m_scope->spawn( task | stdexec::then(set_skeleton) | upon_error(on_error));
     }
 
-    std::optional<Res> head() const
+    std::optional<Result> head() const
     {
         std::shared_lock lock(m_results_mutex);
         return m_results.empty() ? std::nullopt : m_results.front();
@@ -95,7 +123,7 @@ public:
         return m_results.size();
     }
 
-    Res pop()
+    Result pop()
     {
         auto lock = std::unique_lock(m_results_mutex);
         if(m_results.empty())
@@ -115,14 +143,47 @@ public:
         return Awaiter{this};
     }
 
+    bool hasWork()
+    {
+        auto lock = std::shared_lock(m_results_mutex);
+        return m_results.empty() == false;
+    }
+
+    void close() 
+    {
+        m_closed = true;
+    }
+
+    bool isClosed() const
+    {
+        return m_closed.load();
+    }
+
     bool isReady() const
     {
         return head() != std::nullopt;
     }
+
 private:
-    std::list<std::optional<Res>> m_results;
+    void setError(std::exception_ptr exception)
+    {
+        std::lock_guard lock(m_exception_mutex);
+        m_last_error = exception;
+    }
+    std::exception_ptr resetError()
+    {
+        std::lock_guard lock(m_exception_mutex);
+        auto result = m_last_error;
+        m_last_error = nullptr;
+        return result;
+    }
+
+    std::list<std::optional<Result>> m_results;
     mutable std::shared_mutex m_results_mutex;
     std::atomic<Awaiter*> m_awaiter {nullptr};
+    mutable std::shared_mutex m_exception_mutex;
+    std::exception_ptr m_last_error {nullptr};
+    std::atomic_bool m_closed{ false };
 
     exec::async_scope* m_scope{nullptr};
 };

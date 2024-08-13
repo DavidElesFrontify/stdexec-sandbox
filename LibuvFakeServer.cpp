@@ -25,7 +25,7 @@ namespace
     {
         static int64_t call_count = 0;
 
-        if(call_count < 20)
+        if(call_count < 1)
         {
             std::cout << "Spawn worker " << call_count << std::endl;
             Globals::instance().context.spawn2(Input{"Input -" + std::to_string(call_count)}, Output{}, 

@@ -20,6 +20,7 @@ add_executable(sandbox
     LibuvFakeServer.hpp
     Context.hpp
     SingleShotEvent.hpp
+    Retry.hpp
     AsyncReader.hpp
     QueueScheduler.hpp
     Input.cpp 

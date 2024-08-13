@@ -13,6 +13,7 @@
 #include <exec/task.hpp>
 #include <exec/static_thread_pool.hpp>
 #include <exec/async_scope.hpp>
+#include <exec/repeat_effect_until.hpp>
 #include <tbbexec/tbb_thread_pool.hpp>
 
 
@@ -23,10 +24,10 @@
 #include "util.hpp"
 #include "durations.hpp"
 #include "ChannelView.hpp"
+//#include "Retry.hpp"
 
 #include "QueueScheduler.hpp"
 #include "AsyncReader.hpp"
-
 template<typename THREAD_POOL>
 class Context
 {
@@ -47,7 +48,8 @@ public:
     {
         OPTICK_EVENT();
         using stdexec::then;
-        stdexec::sender auto task_flow = processVideoPerFrame(std::move(input), std::move(output)) | then(callback);
+        using stdexec::upon_error;
+        stdexec::sender auto task_flow = processVideoPerFrame(std::move(input), std::move(output)) | upon_error([this](std::exception_ptr error) { handle_error(error);} ) | then(callback);
         m_scope.spawn(std::move(task_flow));
     }
     ~Context()
@@ -101,6 +103,22 @@ private:
             return image;
         }
     };
+
+    void handle_error(std::exception_ptr error)
+    {
+        try
+        {
+            std::rethrow_exception(error);
+        }
+        catch(const std::runtime_error& ex)
+        {
+            std::cerr << "Error occurred: " << ex.what() << std::endl;
+        }
+        catch(...)
+        {
+            std::cerr << "Unknown error occurred" << std::endl; 
+        }
+    }
     stdexec::sender auto readImage(Input* input)
     {
         OPTICK_EVENT();
@@ -123,24 +141,47 @@ private:
 
     stdexec::sender auto processVideoPerFrame(Input input, Output output)
     {
+        using stdexec::then;
+        using stdexec::let_value;
+
         auto queue = std::make_shared<QueueScheduler<std::optional<Image>>>(&m_scope);
-        return stdexec::when_all(readImages(std::move(input), queue), writeImages(std::move(output), queue));
+
+        auto write_callback = [this, output, queue]{ return writeImages(std::move(output), queue); };
+        return stdexec::when_all(readImages(std::move(input), queue), 
+                                stdexec::on(m_pool.get_scheduler(), stdexec::just()) 
+                                | let_value(std::move(write_callback)) 
+                                | exec::repeat_effect_until()
+                                );
     }
 
-    exec::task<void> writeImages(Output output, std::shared_ptr<QueueScheduler<std::optional<Image>>> queue)
+    exec::task<bool> writeImages(Output output, std::shared_ptr<QueueScheduler<std::optional<Image>>> queue)
     {
         using stdexec::when_all;
         using stdexec::then;
         using stdexec::just;
         using stdexec::on;
         OPTICK_EVENT();
-        while(std::optional<Image> image = co_await (*queue))
+        if(queue->isClosed() && queue->hasWork() == false)
         {
-            co_await (when_all(just(std::move(*image)), just(&output)) 
-                      | then([](Image image, Output* output)
-                             {
-                                 output->write(image);
-                             }));
+            co_return true;
+        }
+        try
+        {
+            std::cout << "wait for queue: " << queue->size() << " is closed: " << queue->isClosed() << std::endl;
+            while(std::optional<Image> image = co_await (*queue))
+            {
+                std::cout << "Try write: " << image->getName() << std::endl;
+                co_await (when_all(just(std::move(*image)), just(&output)) 
+                        | then([](Image image, Output* output)
+                                {
+                                    output->write(image);
+                                }));
+            }
+            co_return true;
+        }
+        catch(...)
+        {
+            co_return false;
         }
     }
     exec::task<void> readImages(Input input, std::shared_ptr<QueueScheduler<std::optional<Image>>> queue)
@@ -158,7 +199,7 @@ private:
             queue->push(transform(*image) | then(as_optional));
         }
         queue->push(just(std::nullopt));
-
+        queue->close();
     }
 
     THREAD_POOL m_pool{32};

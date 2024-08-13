@@ -3,6 +3,10 @@
 #include "LibuvFakeServer.hpp"
 constexpr const bool g_enable_capture = true;
 
+void handle_error(std::exception_ptr)
+{
+    std::cout << "error" << std::endl;
+}
 int main()
 {
     if constexpr(g_enable_capture)
@@ -11,8 +15,8 @@ int main()
     }
     {
         OPTICK_FRAME("MainThread");
-        runFakeServer();
-        //runLibUvServer();
+        //runFakeServer();
+        runLibUvServer();
     }
     if constexpr(g_enable_capture)
     {

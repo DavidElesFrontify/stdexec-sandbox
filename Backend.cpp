@@ -4,6 +4,7 @@
 #include "SingleShotEvent.hpp"
 
 #include <optick.h>
+#define ERROR_IN_READ_CHANNELS 1
 
 void BackendA::colorize()
 {
@@ -27,6 +28,9 @@ Lazy<Backend::Channels> BackendA::readChannels() const
         event.set();
     }).detach();
     co_await event;
+#if ERROR_IN_READ_CHANNELS 
+    throw std::runtime_error("Cannot read channels");
+#endif
     co_return Backend::Channels{};
 }
 void BackendA::reconstructFromChannels(const Channels&) 
