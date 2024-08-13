@@ -93,7 +93,6 @@ public:
                 auto lock = std::unique_lock(m_results_mutex);
                 m_results.erase(skeleton_it);
             }
-            if(isReady())
             {
                 auto* awaiter = m_awaiter.exchange(nullptr, std::memory_order_acq_rel);
                 if(awaiter != nullptr)

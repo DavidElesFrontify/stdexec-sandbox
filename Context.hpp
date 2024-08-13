@@ -146,42 +146,35 @@ private:
 
         auto queue = std::make_shared<QueueScheduler<std::optional<Image>>>(&m_scope);
 
-        auto write_callback = [this, output, queue]{ return writeImages(std::move(output), queue); };
-        return stdexec::when_all(readImages(std::move(input), queue), 
-                                stdexec::on(m_pool.get_scheduler(), stdexec::just()) 
-                                | let_value(std::move(write_callback)) 
-                                | exec::repeat_effect_until()
-                                );
+        return stdexec::when_all(readImages(std::move(input), queue), writeImages(std::move(output), queue));
     }
 
-    exec::task<bool> writeImages(Output output, std::shared_ptr<QueueScheduler<std::optional<Image>>> queue)
+    exec::task<void> writeImages(Output output, std::shared_ptr<QueueScheduler<std::optional<Image>>> queue)
     {
         using stdexec::when_all;
         using stdexec::then;
         using stdexec::just;
         using stdexec::on;
         OPTICK_EVENT();
-        if(queue->isClosed() && queue->hasWork() == false)
+        while(queue->isClosed() == false || queue->hasWork())
         {
-            co_return true;
-        }
-        try
-        {
-            std::cout << "wait for queue: " << queue->size() << " is closed: " << queue->isClosed() << std::endl;
-            while(std::optional<Image> image = co_await (*queue))
+            try
             {
-                std::cout << "Try write: " << image->getName() << std::endl;
-                co_await (when_all(just(std::move(*image)), just(&output)) 
-                        | then([](Image image, Output* output)
-                                {
-                                    output->write(image);
-                                }));
+                std::cout << "wait for queue: " << queue->size() << " is closed: " << queue->isClosed() << std::endl;
+                while(std::optional<Image> image = co_await (*queue))
+                {
+                    std::cout << "Try write: " << image->getName() << std::endl;
+                    co_await (when_all(just(std::move(*image)), just(&output)) 
+                            | then([](Image image, Output* output)
+                                    {
+                                        output->write(image);
+                                    }));
+                }
             }
-            co_return true;
-        }
-        catch(...)
-        {
-            co_return false;
+            catch(const std::exception& ex)
+            {
+                std::cout << "Error occurred: " << ex.what() << std::endl;
+            }
         }
     }
     exec::task<void> readImages(Input input, std::shared_ptr<QueueScheduler<std::optional<Image>>> queue)
