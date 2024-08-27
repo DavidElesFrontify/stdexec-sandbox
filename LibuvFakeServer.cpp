@@ -24,16 +24,23 @@ namespace
     void onIdle(uv_idle_t *handle)
     {
         static int64_t call_count = 0;
+        constexpr int64_t num_of_spawned_tasks = 1;
 
-        if(call_count < 1)
+        if(call_count < num_of_spawned_tasks)
         {
             std::cout << "Spawn worker " << call_count << std::endl;
             Globals::instance().context.spawn2(Input{"Input -" + std::to_string(call_count)}, Output{}, 
-            [](){std::cout << "Processing finished " << call_count << std::endl;});
+            [current_call_count = call_count]
+            {
+                std::cout << "Processing finished " << current_call_count << std::endl; 
+                if(current_call_count >= num_of_spawned_tasks - 1)
+                {
+                    uv_stop(Globals::instance().main_loop);
+                }
+            });
         }
         else
         {
-            uv_stop(Globals::instance().main_loop);
         }
         call_count++;
     }

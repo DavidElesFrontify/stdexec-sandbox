@@ -7,6 +7,7 @@
 #include <thread>
 #include <shared_mutex>
 #include <list>
+#include <expected>
 #include <condition_variable>
 
 #include <stdexec/execution.hpp>
@@ -26,8 +27,29 @@
 #include "ChannelView.hpp"
 //#include "Retry.hpp"
 
-#include "QueueScheduler.hpp"
+#include "TaskStream.hpp"
 #include "AsyncReader.hpp"
+
+template<typename Callable>
+class scope_exit
+{
+    public:
+    explicit scope_exit(Callable&& callback)
+    : m_callback(std::forward<Callable>(callback))
+    {}
+    ~scope_exit()
+    {
+        try
+        {
+            m_callback();
+        }
+        catch(...)
+        {}
+    }
+    private:
+    Callable m_callback;
+};
+
 template<typename THREAD_POOL>
 class Context
 {
@@ -49,7 +71,11 @@ public:
         OPTICK_EVENT();
         using stdexec::then;
         using stdexec::upon_error;
-        stdexec::sender auto task_flow = processVideoPerFrame(std::move(input), std::move(output)) | upon_error([this](std::exception_ptr error) { handle_error(error);} ) | then(callback);
+        using stdexec::let_error;
+        using stdexec::just_stopped;
+        stdexec::sender auto task_flow = processVideoPerFrame(std::move(input), std::move(output)) 
+            | then(callback)
+            | let_error([](auto) { std::cout << "Request stop" << std::endl; return just_stopped(); });
         m_scope.spawn(std::move(task_flow));
     }
     ~Context()
@@ -61,7 +87,9 @@ public:
         stdexec::sync_wait(m_scope.on_empty());
     }
 private:
-
+    template<typename T>
+    using Expected = std::expected<T, std::exception_ptr>;
+    using Unexpected = std::unexpected<std::exception_ptr>;
     struct Pipeline
     {
         bool colorize_enabled {true};
@@ -125,8 +153,20 @@ private:
         using stdexec::just;
         using stdexec::then;
         auto scheduler = m_pool.get_scheduler();
+        auto read_image_callback = 
+            [](Input* input)
+            {
+                static uint32_t i = 0;
+                OPTICK_THREAD(g_thread_name.c_str());
+                if(i++ == 3)
+                {
+                   // throw std::runtime_error("Error during read"); 
+                }
+                return input->read();
+            };
 
-        return stdexec::on(scheduler, just(input)) | then([](Input* input) { OPTICK_THREAD(g_thread_name.c_str()); return input->read(); });
+        return stdexec::on(scheduler, just(input)) 
+        | then(read_image_callback);
     }
     stdexec::sender auto transform(Image image)
     {
@@ -143,56 +183,72 @@ private:
     {
         using stdexec::then;
         using stdexec::let_value;
+        using stdexec::read_env;
 
-        auto queue = std::make_shared<QueueScheduler<std::optional<Image>>>(&m_scope);
+        auto stream = std::make_shared<TaskStream<Expected<Image>>>(&m_scope);
 
-        return stdexec::when_all(readImages(std::move(input), queue), writeImages(std::move(output), queue));
+        return stdexec::when_all(
+            read_env(stdexec::get_stop_token) 
+              | let_value([this, input_2 = std::move(input), output, stream](auto stop_token) mutable
+                            {
+                                return readImages(std::move(input_2), stream, stop_token); 
+                            }),
+            writeImages(std::move(output), stream));
     }
 
-    exec::task<void> writeImages(Output output, std::shared_ptr<QueueScheduler<std::optional<Image>>> queue)
+    exec::task<void> writeImages(Output output, std::shared_ptr<TaskStream<Expected<Image>>> stream)
     {
         using stdexec::when_all;
         using stdexec::then;
         using stdexec::just;
         using stdexec::on;
         OPTICK_EVENT();
-        while(queue->isClosed() == false || queue->hasWork())
+        std::cout << "wait for stream: " << stream->size() << " is closed: " << stream->isClosed() << std::endl;
+        while(stream->isClosed() == false || stream->hasWork())
         {
-            try
+            Expected<Image> image = co_await (*stream);
+            if(image.has_value())
             {
-                std::cout << "wait for queue: " << queue->size() << " is closed: " << queue->isClosed() << std::endl;
-                while(std::optional<Image> image = co_await (*queue))
-                {
-                    std::cout << "Try write: " << image->getName() << std::endl;
-                    co_await (when_all(just(std::move(*image)), just(&output)) 
-                            | then([](Image image, Output* output)
-                                    {
-                                        output->write(image);
-                                    }));
-                }
+                std::cout << "Try write: " << image->getName() << std::endl;
+                co_await (when_all(just(std::move(*image)), just(&output)) 
+                        | then([](Image image, Output* output)
+                                {
+                                    output->write(image);
+                                }));
             }
-            catch(const std::exception& ex)
+            else
             {
-                std::cout << "Error occurred: " << ex.what() << std::endl;
+                std::rethrow_exception(image.error());
+                //handle_error(image.error());
+                break;
             }
         }
     }
-    exec::task<void> readImages(Input input, std::shared_ptr<QueueScheduler<std::optional<Image>>> queue)
+    exec::task<void> readImages(Input input,
+         std::shared_ptr<TaskStream<Expected<Image>>> stream,
+         stdexec::inplace_stop_token stop_token)
     {
         using stdexec::when_all;
         using stdexec::then;
         using stdexec::just;
         using stdexec::on;
+        using stdexec::upon_error;
         OPTICK_EVENT();
+
+        scope_exit finally{[&]{stream->close();}};
+
         stdexec::sender_of<stdexec::set_value_t(std::optional<Image>)> auto reading_sender = readImage(&input);
         AsyncReader<std::optional<Image>, decltype(reading_sender)> reader(reading_sender, &m_scope);
-        auto as_optional = [](auto value) { return std::optional{std::move(value)}; };
+        auto as_expected = [](auto value) { return Expected<Image>{std::move(value)}; };
+        auto as_unexpected = [](std::exception_ptr error) -> Expected<Image> { return Unexpected{std::move(error)}; };
         while(std::optional<Image> image = co_await reader.asyncRead())
         {
-            queue->push(transform(*image) | then(as_optional));
+            if(stop_token.stop_requested())
+            {
+                break;
+            }
+            stream->push(transform(*image) | then(as_expected) | upon_error(as_unexpected));
         }
-        queue->push(just(std::nullopt));
-        queue->close();
     }
 
     THREAD_POOL m_pool{32};

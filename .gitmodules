@@ -10,3 +10,6 @@
 [submodule "3rd-party/libuv-cmake-src"]
 	path = 3rd-party/libuv-cmake-src
 	url = https://github.com/xenoscopic/libuv-cmake.git
+[submodule "3rd-party/libuv-src"]
+	path = 3rd-party/libuv-src
+	url = https://github.com/libuv/libuv.git

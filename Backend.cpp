@@ -4,7 +4,7 @@
 #include "SingleShotEvent.hpp"
 
 #include <optick.h>
-#define ERROR_IN_READ_CHANNELS 1
+#define ERROR_IN_READ_CHANNELS 0
 
 void BackendA::colorize()
 {

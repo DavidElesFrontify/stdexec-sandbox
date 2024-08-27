@@ -43,7 +43,7 @@ class Server
 };
 
 
-exec::task<void> testQueue(QueueScheduler<int>& queue, stdexec::scheduler auto scheduler)
+exec::task<void> testQueue(TaskStream<int>& queue, stdexec::scheduler auto scheduler)
 {
     using stdexec::on;
     using stdexec::just;

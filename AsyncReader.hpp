@@ -59,6 +59,11 @@ public:
 
         Result await_resume() 
         {
+            if(auto error = reader->clearError(); error != nullptr)
+            {
+                reader->clear();
+                std::rethrow_exception(error);
+            }
             Result result = *reader->clear();
             reader->asyncReadImpl();
             return result;
@@ -77,7 +82,10 @@ private:
     void asyncReadImpl()
     {
         using stdexec::then;
-        m_scope->spawn(m_sender | then([this](Result result) { setResult(std::move(result)); resumeAwaitingCoroutine(); } ));
+        using stdexec::upon_error;
+        m_scope->spawn(m_sender
+         | then([this](Result result) { setResult(std::move(result)); resumeAwaitingCoroutine(); } )
+         | upon_error([this](std::exception_ptr error) {  setError(error); resumeAwaitingCoroutine(); }));
     }
     void setResult(Result result)
     {
@@ -88,6 +96,17 @@ private:
         }
         m_backbuffer[getWriteIndex()] = std::move(result);
         stepBackbuffer();
+    }
+    void setError(std::exception_ptr error)
+    {
+        std::lock_guard lock{m_exception_mutex};
+        m_last_error = error;
+    }
+    std::exception_ptr clearError()
+    {
+        std::lock_guard lock{m_exception_mutex};
+        auto result = std::exchange(m_last_error, nullptr);
+        return result;
     }
     bool isReady() const 
     {
@@ -132,4 +151,7 @@ private:
     std::array<std::optional<Result>, BACKBUFFER_SIZE> m_backbuffer {};
     uint32_t m_head_index{0};
     std::atomic<Awaiter*> m_awaiting_coroutine {nullptr};
+
+    mutable std::shared_mutex m_exception_mutex;
+    std::exception_ptr m_last_error {nullptr};
 };

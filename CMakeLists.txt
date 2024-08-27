@@ -3,12 +3,13 @@ project(STDEXEC_SANDBOX)
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-set(CMAKE_MODULE_PATH ${CMAKE_MODULE_PATH} ${CMAKE_SOURCE_DIR}/3rd-party/libuv-cmake-src)
+#set(CMAKE_MODULE_PATH ${CMAKE_MODULE_PATH} ${CMAKE_SOURCE_DIR}/3rd-party/libuv-cmake-src)
 add_subdirectory(3rd-party/stdexec-src)
 add_subdirectory(3rd-party/optick-src)
 add_subdirectory(3rd-party/tbb-src)
+add_subdirectory(3rd-party/libuv-src)
 
-find_package(libuv REQUIRED)
+#find_package(libuv REQUIRED)
 
 add_executable(sandbox
     main.cpp
@@ -22,10 +23,10 @@ add_executable(sandbox
     SingleShotEvent.hpp
     Retry.hpp
     AsyncReader.hpp
-    QueueScheduler.hpp
+    TaskStream.hpp
     Input.cpp 
     Output.cpp
     Transformator.cpp
     Image.cpp)
 
-target_link_libraries(sandbox PUBLIC STDEXEC::stdexec TBB::tbb uv OptickCore)
+target_link_libraries(sandbox PUBLIC STDEXEC::stdexec TBB::tbb libuv::libuv OptickCore)

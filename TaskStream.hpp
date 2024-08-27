@@ -13,13 +13,13 @@
 #include <exec/async_scope.hpp>
 
 template<typename Res>
-class QueueScheduler
+class TaskStream
 {
 public:
 
     struct Awaiter
     {
-        QueueScheduler* scheduler {nullptr};
+        TaskStream* scheduler {nullptr};
         std::coroutine_handle<> awaiting_coroutine = std::noop_coroutine();
         bool await_ready() { return scheduler->isReady(); }
         void await_suspend(std::coroutine_handle<> handle)
@@ -46,11 +46,11 @@ public:
         }
     };
     using Result = Res;
-    QueueScheduler(exec::async_scope* scope)
+    TaskStream(exec::async_scope* scope)
     : m_scope(scope)
     {}
 
-    ~QueueScheduler()
+    ~TaskStream()
     {
         /*
         We cannot wait until the scope's thread is finished because the coroutine is moved inside
@@ -66,7 +66,7 @@ public:
         using stdexec::upon_error;
         if(isClosed())
         {
-            throw std::runtime_error("Can't push into a closed queue");
+            throw std::runtime_error("Can't push into a closed stream");
         }
         
         auto skeleton_it = [this]
@@ -79,11 +79,7 @@ public:
             *skeleton_it = std::move(result);
             if(isReady())
             {
-                auto* awaiter = m_awaiter.exchange(nullptr, std::memory_order_acq_rel);
-                if(awaiter != nullptr)
-                {
-                    awaiter->awaiting_coroutine.resume();
-                }
+                resumeAwaiter();
             }
         };
         auto on_error = [this, skeleton_it ](std::exception_ptr error) mutable 
@@ -93,13 +89,7 @@ public:
                 auto lock = std::unique_lock(m_results_mutex);
                 m_results.erase(skeleton_it);
             }
-            {
-                auto* awaiter = m_awaiter.exchange(nullptr, std::memory_order_acq_rel);
-                if(awaiter != nullptr)
-                {
-                    awaiter->awaiting_coroutine.resume();
-                }
-            }
+            resumeAwaiter();
         };
 
         m_scope->spawn( task | stdexec::then(set_skeleton) | upon_error(on_error));
@@ -151,6 +141,11 @@ public:
     void close() 
     {
         m_closed = true;
+        if(hasWork() == false && m_awaiter != nullptr)
+        {
+            setError(std::make_exception_ptr(std::runtime_error("Stream is awaited but it got closed")));
+            resumeAwaiter();
+        }
     }
 
     bool isClosed() const
@@ -164,6 +159,14 @@ public:
     }
 
 private:
+    void resumeAwaiter()
+    {
+        auto* awaiter = m_awaiter.exchange(nullptr, std::memory_order_acq_rel);
+        if(awaiter != nullptr)
+        {
+            awaiter->awaiting_coroutine.resume();
+        }
+    }
     void setError(std::exception_ptr exception)
     {
         std::lock_guard lock(m_exception_mutex);
